@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .bootstrap import ensure_custodian_tags
+from .bootstrap import ensure_custodian_properties, ensure_custodian_tags
 from .config import CONFIG
 from .mcp_client import assert_tools_available, datahub_session
 from .providers.base import AgentResult, get_provider
@@ -83,30 +83,35 @@ def explain(signals: Signals) -> str:
 
 
 _PROMPT = """\
-Sweep the catalog for dead assets{scope_clause}.
+A deterministic scan of {scanned} datasets{scope_clause} has already scored
+every asset for deadness. These {count} cleared the bar — no downstream
+dependents, and a weighted score at or above {threshold}:
 
-Examine up to {limit} datasets. For each one, gather its death signals, then
-score it:
+{candidates}
 
-  no downstream lineage   0.40
-  no owner                0.25
-  no description          0.15
-  stale last-operation    0.10
-  no recent queries       0.10
+Scoring: no downstream lineage 0.40, no owner 0.25, no description 0.15,
+stale last-operation 0.10, no recent queries 0.10. Lineage orphanhood acts as
+a veto, so nothing with a live dependent reached this list.
 
-An asset is a candidate only if it has NO downstream lineage AND scores
-{threshold} or higher. Anything with a live dependent is not a candidate,
-whatever else is true of it.
+Your job is the judgment and the record, not the arithmetic.
 
-For each candidate:
-  1. `add_tags` — apply `{tag}`
-  2. `add_structured_properties` — record the score and a one-line reason
+1. Spot-check the riskiest one or two with `get_lineage` and `get_entities`.
+   The scan is mechanical and can be wrong about intent — an asset can be
+   orphaned in lineage yet obviously deliberate (a published extract, a
+   regulatory archive, something whose description says to keep it). If you
+   find a reason to spare a candidate, drop it and say why.
+2. For every candidate you still endorse:
+     - `add_tags` with `{tag}` (one call, pass all the URNs together)
+     - `add_structured_properties` recording the score and reason. The keys
+       must be full URNs, not bare names, or the call is rejected:
+         "urn:li:structuredProperty:custodian_deadness_score": [<score>]
+         "urn:li:structuredProperty:custodian_reason": ["<reason>"]
+3. `save_document` one report titled "Custodian Sweep" listing each endorsed
+   candidate with its score and reasoning, and any you dropped with why. State
+   plainly that nothing has been deprecated and that these await human
+   approval via `custodian approve`.
 
-Then `save_document` a single sweep report titled "Custodian Sweep", listing
-each candidate with its score and reasoning, and stating clearly that nothing
-has been deprecated and the candidates await human approval.
-
-Finally, reply with that report.
+Then reply with that report.
 """
 
 
@@ -118,11 +123,34 @@ async def sweep(
 ) -> AgentResult:
     provider = get_provider(CONFIG.provider)
     ensure_custodian_tags()
+    ensure_custodian_properties()
+
+    # The scan is deterministic and free; only the judgment needs a model.
+    from .signals import scan
+
+    candidates, scanned = scan(limit=limit, platform=scope or None)
+    if not candidates:
+        return AgentResult(
+            text=(
+                f"Scanned {scanned} datasets{' within ' + scope if scope else ''}. "
+                "No dead assets found — every asset either has a live downstream "
+                "dependency or scored below the threshold. Nothing staged."
+            )
+        )
+
+    listing = "\n".join(
+        f"- {c.name}\n"
+        f"    urn: {c.urn}\n"
+        f"    score: {c.score:.2f} — {c.reason}"
+        for c in candidates
+    )
 
     prompt = _PROMPT.format(
         scope_clause=f" within {scope}" if scope else "",
-        limit=limit,
+        scanned=scanned,
+        count=len(candidates),
         threshold=threshold,
+        candidates=listing,
         tag=DEPRECATION_TAG,
     )
 
