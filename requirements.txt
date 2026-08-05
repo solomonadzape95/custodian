@@ -1,0 +1,12 @@
+# Agent runtime
+google-genai>=1.0.0          # native MCP ClientSession support as a tool
+mcp>=1.2.0                   # stdio client for mcp-server-datahub
+
+# DataHub SDK — used ONLY by `custodian approve` to emit the deprecation
+# aspect, which the MCP server does not expose.
+acryl-datahub>=1.4.0
+
+# CLI
+typer>=0.12.0
+rich>=13.0.0
+python-dotenv>=1.0.0
