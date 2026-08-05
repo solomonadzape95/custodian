@@ -30,7 +30,11 @@ class Config:
             gms_token=os.getenv("DATAHUB_GMS_TOKEN", ""),
             provider=os.getenv("CUSTODIAN_PROVIDER", "gemini"),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            # Rolling alias rather than a pinned name: free-tier quota is
+            # granted per model, and pinned names (gemini-2.0-flash,
+            # gemini-2.5-pro) can sit at limit 0 on a project while the alias
+            # still resolves to a model with quota.
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
             max_tool_calls=int(os.getenv("CUSTODIAN_MAX_TOOL_CALLS", "40")),
         )
 

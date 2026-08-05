@@ -39,6 +39,13 @@ def _emit(result) -> None:
             f"tool-call budget ({CONFIG.max_tool_calls}). This output is "
             "likely incomplete — raise CUSTODIAN_MAX_TOOL_CALLS and re-run."
         )
+    if result.failed_calls:
+        console.print(
+            f"[bold red]Warning:[/bold red] {len(result.failed_calls)} tool "
+            f"call(s) failed ({', '.join(sorted(set(result.failed_calls)))}). "
+            "The agent may still describe them as done — verify in DataHub "
+            "before trusting the write-back."
+        )
     console.print(Markdown(result.text))
     if result.tool_calls:
         console.print(

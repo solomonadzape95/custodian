@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .bootstrap import ensure_custodian_tags
 from .config import CONFIG
 from .mcp_client import assert_tools_available, datahub_session
 from .providers.base import AgentResult, get_provider
@@ -29,6 +30,17 @@ WEIGHTS = {
 }
 
 DEFAULT_THRESHOLD = 0.65
+
+# Only what a sweep needs — declared tools cost input tokens every turn.
+SWEEP_TOOLS = {
+    "search",
+    "get_entities",
+    "get_lineage",
+    "get_dataset_queries",
+    "add_tags",
+    "add_structured_properties",
+    "save_document",
+}
 
 
 @dataclass
@@ -105,6 +117,7 @@ async def sweep(
     threshold: float = DEFAULT_THRESHOLD,
 ) -> AgentResult:
     provider = get_provider(CONFIG.provider)
+    ensure_custodian_tags()
 
     prompt = _PROMPT.format(
         scope_clause=f" within {scope}" if scope else "",
@@ -120,4 +133,5 @@ async def sweep(
             prompt=prompt,
             session=session,
             max_tool_calls=CONFIG.max_tool_calls,
+            allow_tools=SWEEP_TOOLS,
         )

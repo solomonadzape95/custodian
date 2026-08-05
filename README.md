@@ -96,6 +96,19 @@ DataHub UI → **Settings → Access Tokens** → generate. This is `DATAHUB_GMS
 > Gemini project deletes its free tier — every call becomes billable from the
 > first token.
 
+**Free-tier quota is granted per model, per day.** If you hit
+`GenerateRequestsPerDayPerProjectPerModel-FreeTier`, that model is spent for
+the day but others are not — switch `GEMINI_MODEL` rather than waiting:
+
+```bash
+GEMINI_MODEL=gemini-flash-lite-latest   # default
+GEMINI_MODEL=gemini-flash-latest
+```
+
+Prefer the rolling `-latest` aliases over pinned names like
+`gemini-2.0-flash`: quota is keyed to the resolved model, and pinned names on
+some projects sit at a hard `limit: 0` while the alias still has budget.
+
 ### 4. Configure and install
 
 ```bash

@@ -19,6 +19,13 @@ class AgentResult:
 
     text: str
     tool_calls: list[str] = field(default_factory=list)
+    failed_calls: list[str] = field(default_factory=list)
+    """Tools that returned an error.
+
+    Worth surfacing separately: a model will often narrate a write as done
+    even when the tool rejected it, so "the post-mortem says it tagged things"
+    is not evidence that anything was tagged.
+    """
     hit_call_ceiling: bool = False
     """True if the run stopped because it exhausted its tool-call budget.
 
@@ -39,6 +46,7 @@ class LLMProvider(Protocol):
         prompt: str,
         session: ClientSession,
         max_tool_calls: int,
+        allow_tools: set[str] | None = None,
     ) -> AgentResult: ...
 
 

@@ -7,6 +7,7 @@ would break on the first graph shaped differently from the demo.
 
 from __future__ import annotations
 
+from .bootstrap import ensure_custodian_tags
 from .config import CONFIG
 from .mcp_client import assert_tools_available, datahub_session
 from .providers.base import AgentResult, get_provider
@@ -45,8 +46,24 @@ Finally, reply with the post-mortem text itself.
 """
 
 
+# Only what an investigation needs. Every declared tool costs input tokens on
+# every turn, and the free tier meters those per minute.
+INVESTIGATE_TOOLS = {
+    "search",
+    "get_entities",
+    "get_lineage",
+    "get_lineage_paths_between",
+    "get_dataset_queries",
+    "add_tags",
+    "save_document",
+}
+
+
 async def investigate(table: str, *, context: str = "") -> AgentResult:
     provider = get_provider(CONFIG.provider)
+    # DataHub refuses to attach a tag whose entity does not exist yet, and the
+    # MCP server reports that as ordinary text the agent can talk past.
+    ensure_custodian_tags()
 
     prompt = _PROMPT.format(
         table=table,
@@ -61,4 +78,5 @@ async def investigate(table: str, *, context: str = "") -> AgentResult:
             prompt=prompt,
             session=session,
             max_tool_calls=CONFIG.max_tool_calls,
+            allow_tools=INVESTIGATE_TOOLS,
         )
