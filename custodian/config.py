@@ -21,6 +21,7 @@ class Config:
     provider: str
     gemini_api_key: str
     gemini_model: str
+    compat_model: str
     max_tool_calls: int
 
     @classmethod
@@ -34,7 +35,9 @@ class Config:
             # granted per model, and pinned names (gemini-2.0-flash,
             # gemini-2.5-pro) can sit at limit 0 on a project while the alias
             # still resolves to a model with quota.
-            gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-latest"),
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
+            # Empty means "use the provider's own default model".
+            compat_model=os.getenv("CUSTODIAN_MODEL", ""),
             max_tool_calls=int(os.getenv("CUSTODIAN_MAX_TOOL_CALLS", "40")),
         )
 
@@ -56,6 +59,7 @@ class Config:
             )
 
     def require_provider(self) -> None:
+        """Only Gemini is checked here; other providers validate their own key."""
         if self.provider == "gemini" and not self.gemini_api_key:
             raise ConfigError(
                 "GEMINI_API_KEY is not set. Get a free-tier key at "

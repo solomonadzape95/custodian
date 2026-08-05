@@ -55,7 +55,14 @@ def get_provider(name: str) -> LLMProvider:
         from .gemini import GeminiProvider
 
         return GeminiProvider()
+
+    from .openai_compat import ENDPOINTS, OpenAICompatProvider
+
+    if name in ENDPOINTS:
+        return OpenAICompatProvider(name)
+
+    supported = ", ".join(["gemini", *sorted(ENDPOINTS)])
     raise ValueError(
-        f"Unknown provider {name!r}. Supported: 'gemini'. "
+        f"Unknown provider {name!r}. Supported: {supported}. "
         "Set CUSTODIAN_PROVIDER in .env"
     )

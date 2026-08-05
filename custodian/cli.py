@@ -126,12 +126,24 @@ def doctor() -> None:
     else:
         token_state = "[red]MISSING[/red]"
 
-    console.print(f"provider     : {CONFIG.provider} ({CONFIG.gemini_model})")
+    import os
+
+    from .providers.openai_compat import ENDPOINTS
+
+    if CONFIG.provider == "gemini":
+        model, key_var = CONFIG.gemini_model, "GEMINI_API_KEY"
+    elif CONFIG.provider in ENDPOINTS:
+        _, key_var, default_model = ENDPOINTS[CONFIG.provider]
+        model = CONFIG.compat_model or default_model
+    else:
+        model, key_var = "?", "?"
+
+    key_state = "set" if os.getenv(key_var) else f"[red]MISSING ({key_var})[/red]"
+
+    console.print(f"provider     : {CONFIG.provider} ({model})")
     console.print(f"gms url      : {CONFIG.gms_url}")
     console.print(f"gms token    : {token_state}")
-    console.print(
-        f"provider key : {'set' if CONFIG.gemini_api_key else '[red]MISSING[/red]'}"
-    )
+    console.print(f"provider key : {key_state}")
     console.print(f"tool budget  : {CONFIG.max_tool_calls}")
     console.print(f"mcp log      : [dim]{LOG_PATH}[/dim]")
 

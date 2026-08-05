@@ -206,11 +206,28 @@ complete.
 
 ---
 
-## Provider
+## Providers
 
-Gemini is the default because it makes the project free to run. The provider
-seam (`custodian/providers/base.py`) is a single Protocol — adding Claude or a
-local model is a new file, not a rewrite.
+Custodian runs on four providers, all with free tiers. Set
+`CUSTODIAN_PROVIDER` and the matching key:
+
+| `CUSTODIAN_PROVIDER` | Key | Notes |
+|---|---|---|
+| `gemini` *(default)* | `GEMINI_API_KEY` | Quota is **per model per day**; switch `GEMINI_MODEL` when one is spent |
+| `groq` | `GROQ_API_KEY` | Fastest inference, but a low per-minute token ceiling — an agentic turn can approach it on its own |
+| `cerebras` | `CEREBRAS_API_KEY` | Roomier daily token budget; a good fallback when Gemini's daily quota is gone |
+| `openrouter` | `OPENROUTER_API_KEY` | Widest model choice, including `:free` variants |
+
+**Quota, not capability, is what you will actually hit.** An agent loop resends
+its whole history every turn, so a single investigation can spend a few hundred
+thousand input tokens. Custodian paces itself against the limits the API
+reports rather than retrying into them, but when a daily quota is gone the only
+fix is to move — which is why switching provider is an `.env` edit.
+
+Architecturally there are two implementations behind one Protocol
+(`custodian/providers/base.py`): Gemini, and one OpenAI-compatible client that
+serves Groq, Cerebras and OpenRouter, since those differ only by base URL.
+Adding Claude or a local model is a new file, not a rewrite.
 
 ---
 

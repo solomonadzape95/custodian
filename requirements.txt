@@ -1,6 +1,7 @@
 # Agent runtime
-google-genai>=1.0.0          # native MCP ClientSession support as a tool
+google-genai>=1.0.0          # default provider (Gemini free tier)
 mcp>=1.2.0                   # stdio client for mcp-server-datahub
+openai>=1.40                 # Groq / Cerebras / OpenRouter (OpenAI-compatible)
 
 # DataHub SDK — used ONLY by `custodian approve` to emit the deprecation
 # aspect, which the MCP server does not expose.
