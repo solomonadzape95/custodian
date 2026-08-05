@@ -20,21 +20,38 @@ You are investigating a data incident. Work the graph, do not guess:
 2. Walk lineage DOWNSTREAM to establish the blast radius — every dataset,
    dashboard, and model that depends on the broken table.
 3. Walk lineage UPSTREAM to find the likely root cause. Use
-   `get_lineage_paths_between` to get the exact path and any transformation
-   context between the broken table and the suspected origin.
-4. Pull owners of every impacted asset so the write-up says who to notify.
-5. Check `get_dataset_queries` to show how the data was actually consumed.
+   `get_lineage_paths_between` for the exact path and transformation context.
+4. **Read the upstream assets, do not just map them.** Call `get_entities` on
+   the upstream candidates and read their description and documentation. A
+   real incident usually leaves a written trace — a note about a migration, a
+   schema change, a backfill, a known anomaly, a freshness warning. That note
+   is the difference between naming the actual cause and guessing at it.
+   Lineage tells you *where* to look; the asset's own metadata tells you
+   *what happened*. Check the columns too (`list_schema_fields`) when a
+   specific field is implicated.
+   Query your prime suspects **one URN at a time**. `get_entities` returns a
+   lot per asset, and a batched call will have the later assets' descriptions
+   trimmed away before you ever see them.
+5. Pull owners of every impacted asset so the write-up says who to notify.
 
-Ground every claim in a tool result. If you could not determine something,
-say so plainly rather than inventing it — a post-mortem that invents a root
-cause is worse than one that says the cause is undetermined.
+Evidence discipline:
+  - Ground every claim in a tool result, and prefer what an asset *says* about
+    itself over what you infer from its position in the graph.
+  - If an upstream note contradicts your theory, the note wins.
+  - Distinguish what you found from what you suspect. If the evidence does not
+    identify a cause, say the cause is undetermined and list what you ruled
+    out. A post-mortem that invents a root cause is worse than one that admits
+    uncertainty — someone will act on it.
 
-Then write the post-mortem and persist your findings:
-  - `save_document` with the completed post-mortem
-  - `add_tags` applying the `incident-impacted` tag to each impacted asset
+Then persist your findings:
+  - `save_document` with the completed post-mortem (call this once)
+  - `add_tags` applying the `incident-impacted` tag to the impacted assets
+    (batch them into a single call — the tool takes a list)
 
-Prefer a small number of well-chosen tool calls over exhaustively crawling
-every branch of the graph.
+Be economical. Do not re-run a search you have already run, and do not re-walk
+lineage you have already walked; you can see your earlier results in this
+conversation. Every redundant call costs budget that a deeper hop would use
+better.
 """
 
 POSTMORTEM_TEMPLATE = """\

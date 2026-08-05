@@ -27,9 +27,14 @@ Write "None found" if nothing depends on it.
 
 ## Likely Root Cause (upstream)
 Trace back from `{table}` toward the origin. Name the specific upstream asset
-you believe is responsible and the lineage path that connects them. If the
-evidence does not support naming a cause, say the cause is undetermined and
-state what you ruled out.
+you believe is responsible and the lineage path that connects them.
+
+Then quote the evidence. Inspect the upstream assets' own descriptions and
+documentation and quote the line that supports your conclusion, naming the
+asset it came from. If your conclusion rests on inference from lineage shape
+rather than something an asset actually states, say so explicitly. If nothing
+in the metadata supports a cause, say it is undetermined and list what you
+checked and ruled out.
 
 ## Impacted Owners to Notify
 The distinct owners across all impacted assets.
