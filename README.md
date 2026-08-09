@@ -57,6 +57,21 @@ so Custodian scores on signals that exist in the open-source product:
 Downstream lineage dominates deliberately, and acts as a veto: an asset with a
 live dependent is never a candidate, whatever its other signals say.
 
+A second veto covers assets that are orphaned *on purpose*. If a dataset
+carries a `retention`, `legal_hold`, or `compliance` custom property, it is
+held back from staging no matter how dead it scores, and listed in the report
+as spared with the property that protected it. Nothing reads a regulatory
+archive — that is what it is for, and lineage cannot tell that apart from
+abandonment.
+
+The scoring rules are pure functions with no DataHub dependency, and both
+vetoes are pinned by tests:
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
 ---
 
 ## Setup

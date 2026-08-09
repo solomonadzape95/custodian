@@ -28,7 +28,7 @@ from datahub.metadata.schema_classes import (
 from datahub.sdk.main_client import DataHubClient
 
 from .config import CONFIG
-from .sweep import Signals, explain, is_candidate, score
+from .sweep import Signals, explain, is_candidate, protected_reason, score
 
 
 @dataclass
@@ -38,6 +38,17 @@ class Candidate:
     signals: Signals
     score: float
     reason: str
+
+
+@dataclass
+class Protected:
+    """Scored as dead, but held back by an explicit retention/legal signal."""
+
+    urn: str
+    name: str
+    score: float
+    reason: str
+    protection: str
 
 
 def _clients() -> tuple[DataHubGraph, DataHubClient]:
@@ -52,18 +63,26 @@ def _readable(urn: str) -> str:
     return urn.split(",")[-2] if "," in urn else urn
 
 
-def _has_description(graph: DataHubGraph, urn: str) -> bool:
+def _has_description(
+    graph: DataHubGraph, urn: str, props: DatasetPropertiesClass | None
+) -> bool:
     editable = graph.get_aspect(
         entity_urn=urn, aspect_type=EditableDatasetPropertiesClass
     )
     if editable is not None and (editable.description or "").strip():
         return True
-    props = graph.get_aspect(entity_urn=urn, aspect_type=DatasetPropertiesClass)
     return bool(props is not None and (props.description or "").strip())
 
 
-def scan(limit: int = 25, platform: str | None = None) -> tuple[list[Candidate], int]:
-    """Score datasets for deadness. Returns (candidates, number scanned)."""
+def scan(
+    limit: int = 25, platform: str | None = None
+) -> tuple[list[Candidate], list[Protected], int]:
+    """Score datasets for deadness.
+
+    Returns (candidates, protected, number scanned). `protected` holds assets
+    that scored as dead but carry a retention or legal-hold property; they are
+    reported rather than staged, so the human sees what was spared and why.
+    """
     graph, sdk = _clients()
 
     urns = list(
@@ -71,6 +90,7 @@ def scan(limit: int = 25, platform: str | None = None) -> tuple[list[Candidate],
     )[:limit]
 
     candidates: list[Candidate] = []
+    protected: list[Protected] = []
     for urn in urns:
         try:
             downstream = sdk.lineage.get_lineage(
@@ -80,13 +100,29 @@ def scan(limit: int = 25, platform: str | None = None) -> tuple[list[Candidate],
             continue  # an asset we cannot read lineage for is not a safe candidate
 
         ownership = graph.get_aspect(entity_urn=urn, aspect_type=OwnershipClass)
+        props = graph.get_aspect(entity_urn=urn, aspect_type=DatasetPropertiesClass)
 
         signals = Signals(
             no_downstream=not downstream,
             no_owner=not (ownership and ownership.owners),
-            no_description=not _has_description(graph, urn),
+            no_description=not _has_description(graph, urn, props),
         )
         if not is_candidate(signals):
+            continue
+
+        # Checked only after scoring, so the report can say "this scored 0.80
+        # and was spared anyway" rather than quietly omitting the asset.
+        protection = protected_reason(props.customProperties if props else None)
+        if protection:
+            protected.append(
+                Protected(
+                    urn=urn,
+                    name=_readable(urn),
+                    score=score(signals),
+                    reason=explain(signals),
+                    protection=protection,
+                )
+            )
             continue
 
         candidates.append(
@@ -100,4 +136,5 @@ def scan(limit: int = 25, platform: str | None = None) -> tuple[list[Candidate],
         )
 
     candidates.sort(key=lambda c: -c.score)
-    return candidates, len(urns)
+    protected.sort(key=lambda p: -p.score)
+    return candidates, protected, len(urns)

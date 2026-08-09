@@ -31,6 +31,13 @@ WEIGHTS = {
 
 DEFAULT_THRESHOLD = 0.65
 
+# Some assets are orphaned in lineage on purpose. A retention policy is the
+# clearest case: nothing reads the table today, but somebody committed to
+# keeping it for a fixed period, usually for a regulator. Deadness scoring
+# cannot see that intent — lineage says "dead", the policy says "keep" — so
+# these keys veto retirement outright rather than merely lowering a score.
+PROTECTED_KEYS = ("retention", "legal_hold", "legalhold", "compliance")
+
 # Only what a sweep needs — declared tools cost input tokens every turn.
 SWEEP_TOOLS = {
     "search",
@@ -69,6 +76,21 @@ def is_candidate(signals: Signals, threshold: float = DEFAULT_THRESHOLD) -> bool
     return score(signals) >= threshold
 
 
+def protected_reason(custom_properties: dict[str, str] | None) -> str | None:
+    """Why this asset must not be retired, or None if nothing protects it.
+
+    Matches on the property *key*, not its value: `retentionPeriod: '7 years'`
+    and `legal_hold: 'false'` both surface here. A false-looking value is not
+    treated as permission to delete — deciding that is the human's call, and
+    the reason is carried into the report so they can make it.
+    """
+    for key, value in (custom_properties or {}).items():
+        folded = key.lower().replace("-", "_")
+        if any(marker in folded for marker in PROTECTED_KEYS):
+            return f"{key} = {value}"
+    return None
+
+
 def explain(signals: Signals) -> str:
     """Human-readable justification, for the structured property and report."""
     reasons = {
@@ -88,7 +110,7 @@ every asset for deadness. These {count} cleared the bar — no downstream
 dependents, and a weighted score at or above {threshold}:
 
 {candidates}
-
+{spared_clause}
 Scoring: no downstream lineage 0.40, no owner 0.25, no description 0.15,
 stale last-operation 0.10, no recent queries 0.10. Lineage orphanhood acts as
 a veto, so nothing with a live dependent reached this list.
@@ -107,9 +129,12 @@ Your job is the judgment and the record, not the arithmetic.
          "urn:li:structuredProperty:custodian_deadness_score": [<score>]
          "urn:li:structuredProperty:custodian_reason": ["<reason>"]
 3. `save_document` one report titled "Custodian Sweep" listing each endorsed
-   candidate with its score and reasoning, and any you dropped with why. State
-   plainly that nothing has been deprecated and that these await human
-   approval via `custodian approve`.
+   candidate with its score and reasoning, and any you dropped with why. If
+   any assets were held back by a retention or legal signal, list them in a
+   "Spared" section with the property that protected them — a reader needs to
+   see that they were considered and deliberately left alone. State plainly
+   that nothing has been deprecated and that these await human approval via
+   `custodian approve`.
 
 Then reply with that report.
 """
@@ -128,13 +153,24 @@ async def sweep(
     # The scan is deterministic and free; only the judgment needs a model.
     from .signals import scan
 
-    candidates, scanned = scan(limit=limit, platform=scope or None)
+    candidates, protected, scanned = scan(limit=limit, platform=scope or None)
+
+    spared = ""
+    if protected:
+        spared = "\nHeld back — these scored as dead but carry an explicit " \
+            "retention or legal signal. Do not stage them. Report them as " \
+            "spared, with the property that protected them:\n\n" + "\n".join(
+                f"- {p.name} (score {p.score:.2f}) — protected by {p.protection}"
+                for p in protected
+            ) + "\n"
+
     if not candidates:
+        note = f" {len(protected)} were spared by a retention signal." if protected else ""
         return AgentResult(
             text=(
                 f"Scanned {scanned} datasets{' within ' + scope if scope else ''}. "
                 "No dead assets found — every asset either has a live downstream "
-                "dependency or scored below the threshold. Nothing staged."
+                f"dependency or scored below the threshold.{note} Nothing staged."
             )
         )
 
@@ -151,6 +187,7 @@ async def sweep(
         count=len(candidates),
         threshold=threshold,
         candidates=listing,
+        spared_clause=spared,
         tag=DEPRECATION_TAG,
     )
 
