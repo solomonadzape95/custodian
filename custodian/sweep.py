@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from datahub.emitter.mcp import MetadataChangeProposalWrapper
+
 from .bootstrap import ensure_custodian_properties, ensure_custodian_tags
 from .config import CONFIG
 from .mcp_client import assert_tools_available, datahub_session
@@ -45,7 +47,6 @@ SWEEP_TOOLS = {
     "get_lineage",
     "get_dataset_queries",
     "add_tags",
-    "add_structured_properties",
     "save_document",
 }
 
@@ -105,7 +106,7 @@ def explain(signals: Signals) -> str:
 
 
 _PROMPT = """\
-A deterministic scan of {scanned} datasets{scope_clause} has already scored
+A deterministic scan of {coverage}{scope_clause} has already scored
 every asset for deadness. These {count} cleared the bar — no downstream
 dependents, and a weighted score at or above {threshold}:
 
@@ -124,10 +125,8 @@ Your job is the judgment and the record, not the arithmetic.
    find a reason to spare a candidate, drop it and say why.
 2. For every candidate you still endorse:
      - `add_tags` with `{tag}` (one call, pass all the URNs together)
-     - `add_structured_properties` recording the score and reason. The keys
-       must be full URNs, not bare names, or the call is rejected:
-         "urn:li:structuredProperty:custodian_deadness_score": [<score>]
-         "urn:li:structuredProperty:custodian_reason": ["<reason>"]
+   Custodian records the score and reason onto the asset itself, so do not
+   try to write those — just tag what you endorse.
 3. `save_document` one report titled "Custodian Sweep" listing each endorsed
    candidate with its score and reasoning, and any you dropped with why. If
    any assets were held back by a retention or legal signal, list them in a
@@ -140,10 +139,77 @@ Then reply with that report.
 """
 
 
+def record_reasoning(candidates) -> int:
+    """Stamp each staged candidate's score and reason onto it, in code.
+
+    The agent was asked to do this with `add_structured_properties` and it is
+    unreliable at it — a malformed payload fails with `property_values cannot
+    be empty`, and the MCP server reports that as ordinary text the model reads
+    past and calls done.
+
+    There is no judgment in this step anyway. The score and the reason were
+    both computed deterministically by the scan; having a model retype them
+    into a tool call adds a failure mode and nothing else. The agent still
+    decides *which* candidates it endorses — that is the judgment — and code
+    records the numbers it already knows.
+
+    Only assets the agent actually tagged are stamped, so an endorsement it
+    withdrew leaves no trace.
+    """
+    from datahub.metadata.schema_classes import (
+        StructuredPropertiesClass,
+        StructuredPropertyValueAssignmentClass,
+    )
+
+    from .bootstrap import DEADNESS_REASON, DEADNESS_SCORE
+    from .watch import _clients, staged_urns
+
+    graph, _ = _clients()
+    tagged = staged_urns(graph)
+    stamped = 0
+
+    for candidate in candidates:
+        if candidate.urn not in tagged:
+            continue
+
+        # Read-merge-write. The estate's own governance properties live in this
+        # same aspect — clobbering `showcase.retentionPeriod` here would delete
+        # the very signal the retention veto depends on.
+        existing = graph.get_aspect(
+            entity_urn=candidate.urn, aspect_type=StructuredPropertiesClass
+        )
+        ours = {
+            f"urn:li:structuredProperty:{DEADNESS_SCORE}": [candidate.score],
+            f"urn:li:structuredProperty:{DEADNESS_REASON}": [candidate.reason],
+        }
+        kept = [
+            assignment
+            for assignment in (existing.properties if existing else [])
+            if assignment.propertyUrn not in ours
+        ]
+        graph.emit(
+            MetadataChangeProposalWrapper(
+                entityUrn=candidate.urn,
+                aspect=StructuredPropertiesClass(
+                    properties=kept
+                    + [
+                        StructuredPropertyValueAssignmentClass(
+                            propertyUrn=urn, values=values
+                        )
+                        for urn, values in ours.items()
+                    ]
+                ),
+            )
+        )
+        stamped += 1
+
+    return stamped
+
+
 async def sweep(
     *,
     scope: str = "",
-    limit: int = 25,
+    limit: int = 500,
     threshold: float = DEFAULT_THRESHOLD,
 ) -> AgentResult:
     provider = get_provider(CONFIG.provider)
@@ -153,7 +219,12 @@ async def sweep(
     # The scan is deterministic and free; only the judgment needs a model.
     from .signals import scan
 
-    candidates, protected, scanned = scan(limit=limit, platform=scope or None)
+    candidates, protected, scanned, total = scan(limit=limit, platform=scope or None)
+    coverage = (
+        f"{scanned} of {total} datasets"
+        if scanned < total
+        else f"all {total} datasets"
+    )
 
     spared = ""
     if protected:
@@ -165,12 +236,24 @@ async def sweep(
             ) + "\n"
 
     if not candidates:
-        note = f" {len(protected)} were spared by a retention signal." if protected else ""
+        note = (
+            f" {len(protected)} scored as dead but were spared by a retention "
+            "or legal signal." if protected else ""
+        )
+        # Say what was *not* looked at. A partial scan reporting "no dead
+        # assets" reads as an all-clear for the whole estate, and is not one.
+        caveat = (
+            f" Note: {total - scanned} dataset(s) were not examined — raise "
+            "--limit to cover the estate."
+            if scanned < total
+            else ""
+        )
         return AgentResult(
             text=(
-                f"Scanned {scanned} datasets{' within ' + scope if scope else ''}. "
+                f"Scanned {coverage}{' within ' + scope if scope else ''}. "
                 "No dead assets found — every asset either has a live downstream "
-                f"dependency or scored below the threshold.{note} Nothing staged."
+                f"dependency or scored below the threshold.{note}{caveat} "
+                "Nothing staged."
             )
         )
 
@@ -183,7 +266,7 @@ async def sweep(
 
     prompt = _PROMPT.format(
         scope_clause=f" within {scope}" if scope else "",
-        scanned=scanned,
+        coverage=coverage,
         count=len(candidates),
         threshold=threshold,
         candidates=listing,
@@ -193,10 +276,14 @@ async def sweep(
 
     async with datahub_session() as session:
         await assert_tools_available(session)
-        return await provider.run_agent(
+        result = await provider.run_agent(
             system=SWEEP_SYSTEM,
             prompt=prompt,
             session=session,
             max_tool_calls=CONFIG.max_tool_calls,
             allow_tools=SWEEP_TOOLS,
         )
+
+    # Record the arithmetic in code, once the agent has said what it endorses.
+    record_reasoning(candidates)
+    return result

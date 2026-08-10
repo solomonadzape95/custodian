@@ -122,7 +122,7 @@ def investigate(
 @app.command()
 def sweep(
     scope: str = typer.Option("", help="Limit to a domain or platform."),
-    limit: int = typer.Option(25, help="Maximum assets to examine."),
+    limit: int = typer.Option(500, help="Maximum assets to examine."),
 ) -> None:
     """Data died: find dead assets and stage them for human approval."""
     from .sweep import sweep as run
@@ -134,7 +134,7 @@ def sweep(
 @app.command()
 def watch(
     interval: int = typer.Option(300, help="Seconds between ticks."),
-    limit: int = typer.Option(25, help="Maximum assets to examine per tick."),
+    limit: int = typer.Option(500, help="Maximum assets to examine per tick."),
     scope: str = typer.Option("", help="Limit to a domain or platform."),
     once: bool = typer.Option(False, "--once", help="Run a single tick and exit."),
     notify: bool = typer.Option(

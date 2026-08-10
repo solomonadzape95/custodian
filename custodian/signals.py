@@ -109,19 +109,28 @@ def _governance_properties(
 
 
 def scan(
-    limit: int = 25, platform: str | None = None
-) -> tuple[list[Candidate], list[Protected], int]:
+    limit: int = 500, platform: str | None = None
+) -> tuple[list[Candidate], list[Protected], int, int]:
     """Score datasets for deadness.
 
-    Returns (candidates, protected, number scanned). `protected` holds assets
+    Returns (candidates, protected, scanned, total). `protected` holds assets
     that scored as dead but carry a retention or legal-hold property; they are
     reported rather than staged, so the human sees what was spared and why.
+
+    `total` is reported separately from `scanned` on purpose. A limit truncates
+    the estate in catalogue order, which is arbitrary — so a partial scan that
+    finds nothing means "nothing here", not "nothing anywhere", and the caller
+    must be able to tell those apart. The default is high enough to cover a
+    demo estate whole, because the scan is deterministic and costs no model
+    calls; there is no reason to sample.
     """
     graph, sdk = _clients()
 
-    urns = list(
+    everything = list(
         graph.get_urns_by_filter(entity_types=["dataset"], platform=platform)
-    )[:limit]
+    )
+    total = len(everything)
+    urns = everything[:limit]
 
     candidates: list[Candidate] = []
     protected: list[Protected] = []
@@ -171,4 +180,4 @@ def scan(
 
     candidates.sort(key=lambda c: -c.score)
     protected.sort(key=lambda p: -p.score)
-    return candidates, protected, len(urns)
+    return candidates, protected, len(urns), total

@@ -120,7 +120,7 @@ async def tick(*, limit: int, scope: str = "") -> TickResult:
             unstage(graph, urn)
             result.retracted.append(urn)
 
-    candidates, protected, scanned = scan(limit=limit, platform=scope or None)
+    candidates, protected, scanned, _total = scan(limit=limit, platform=scope or None)
     result.scanned = scanned
     result.spared = len(protected)
 
