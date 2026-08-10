@@ -23,6 +23,8 @@ class Config:
     gemini_model: str
     compat_model: str
     max_tool_calls: int
+    frontend_url: str
+    notify_transport: str
 
     @classmethod
     def load(cls) -> "Config":
@@ -39,6 +41,11 @@ class Config:
             # Empty means "use the provider's own default model".
             compat_model=os.getenv("CUSTODIAN_MODEL", ""),
             max_tool_calls=int(os.getenv("CUSTODIAN_MAX_TOOL_CALLS", "40")),
+            # GMS answers on 8080; the UI a human clicks into is on 9002.
+            frontend_url=os.getenv("DATAHUB_FRONTEND_URL", "http://localhost:9002"),
+            # "console" renders messages without sending. Defaulting to
+            # anything else would mean a fresh clone could mail strangers.
+            notify_transport=os.getenv("CUSTODIAN_NOTIFY", "console").lower(),
         )
 
     @property

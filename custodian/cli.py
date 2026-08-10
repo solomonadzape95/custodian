@@ -2,6 +2,7 @@
 
     custodian investigate <table>   data broke — explain impact and cause
     custodian sweep                 data died — stage dead assets for review
+    custodian watch                 sweep continuously; retract stale findings
     custodian approve               human lands the staged retirements
     custodian doctor                check the environment before demoing
 """
@@ -54,16 +55,68 @@ def _emit(result) -> None:
         )
 
 
+def _notify(urns: list[str], kind: str, *, send: bool, summary: str = "") -> None:
+    """Render (and only optionally send) owner digests for a set of assets."""
+    from .approve import open_graph
+    from .notify import build_digests, deliver
+
+    if not urns:
+        return
+    digests, unreachable = build_digests(open_graph(), urns, kind, summary)
+    if unreachable:
+        console.print(
+            f"[yellow]{len(unreachable)} asset(s) have no reachable owner[/yellow] — "
+            "nobody will be told about them: "
+            f"{', '.join(u.split(',')[-2] if ',' in u else u for u in unreachable[:5])}"
+            f"{' …' if len(unreachable) > 5 else ''}"
+        )
+    console.print(deliver(digests, send=send))
+
+
 @app.command()
 def investigate(
     table: str = typer.Argument(..., help="Name or URN of the broken table."),
     context: str = typer.Option("", help="What the reporter observed."),
+    notify: bool = typer.Option(
+        False, "--notify", help="Render a digest for each impacted asset's owners."
+    ),
+    send: bool = typer.Option(
+        False,
+        "--send",
+        help="Actually deliver. Requires CUSTODIAN_NOTIFY=smtp. Off by default.",
+    ),
 ) -> None:
     """Data broke: trace the blast radius and likely cause, write a post-mortem."""
     from .investigate import investigate as run
 
     console.print(f"[bold]Investigating[/bold] {table} …")
-    _emit(_run(run(table, context=context)))
+    result = _run(run(table, context=context))
+    _emit(result)
+
+    if notify:
+        from .report import INCIDENT_TAG
+        from .watch import _clients
+
+        graph, _ = _clients()
+        impacted = list(
+            graph.get_urns_by_filter(
+                entity_types=["dataset"],
+                extraFilters=[
+                    {
+                        "field": "tags",
+                        "condition": "EQUAL",
+                        "values": [f"urn:li:tag:{INCIDENT_TAG}"],
+                    }
+                ],
+            )
+        )
+        console.print(f"\n[bold]Notifying owners[/bold] of {len(impacted)} asset(s) …")
+        _notify(
+            impacted,
+            "incident",
+            send=send,
+            summary=result.text.split("## Blast Radius")[0].strip()[:600],
+        )
 
 
 @app.command()
@@ -76,6 +129,48 @@ def sweep(
 
     console.print("[bold]Sweeping[/bold] for dead assets …")
     _emit(_run(run(scope=scope, limit=limit)))
+
+
+@app.command()
+def watch(
+    interval: int = typer.Option(300, help="Seconds between ticks."),
+    limit: int = typer.Option(25, help="Maximum assets to examine per tick."),
+    scope: str = typer.Option("", help="Limit to a domain or platform."),
+    once: bool = typer.Option(False, "--once", help="Run a single tick and exit."),
+    notify: bool = typer.Option(
+        False, "--notify", help="Render a digest for owners of new candidates."
+    ),
+    send: bool = typer.Option(
+        False, "--send", help="Actually deliver. Requires CUSTODIAN_NOTIFY=smtp."
+    ),
+) -> None:
+    """Sweep continuously: stage what is newly dead, retract what came back."""
+    from .watch import watch as run
+
+    def report(result) -> None:
+        for urn in result.retracted:
+            name = urn.split(",")[-2] if "," in urn else urn
+            console.print(f"[yellow]retracted[/yellow] {name} — it has consumers again")
+        if result.new:
+            console.print(f"[green]staged {len(result.new)} new candidate(s)[/green]")
+            if notify:
+                _notify(result.new, "staged", send=send)
+        if not result.changed:
+            console.print(
+                f"[dim]scanned {result.scanned}; nothing new "
+                f"({result.already_staged} already staged, {result.spared} spared). "
+                "No model calls spent.[/dim]"
+            )
+
+    console.print(
+        f"[bold]Watching[/bold] every {interval}s. Ctrl-C to stop."
+        if not once
+        else "[bold]Running one tick[/bold] …"
+    )
+    try:
+        _run(run(interval=interval, limit=limit, scope=scope, once=once, on_tick=report))
+    except KeyboardInterrupt:
+        console.print("\nStopped.")
 
 
 @app.command()
@@ -145,6 +240,21 @@ def doctor() -> None:
     console.print(f"gms token    : {token_state}")
     console.print(f"provider key : {key_state}")
     console.print(f"tool budget  : {CONFIG.max_tool_calls}")
+
+    # A misconfigured notifier fails by staying quiet, which looks exactly like
+    # "there was nothing to report" — so say plainly what it would do.
+    if CONFIG.notify_transport == "smtp":
+        missing = [v for v in ("SMTP_HOST", "SMTP_FROM") if not os.getenv(v)]
+        if missing:
+            notify_state = f"smtp [red]incomplete — missing {', '.join(missing)}[/red]"
+        else:
+            notify_state = (
+                f"smtp via {os.getenv('SMTP_HOST')} "
+                "[yellow](will send real mail with --send)[/yellow]"
+            )
+    else:
+        notify_state = f"{CONFIG.notify_transport} [dim](renders only, never sends)[/dim]"
+    console.print(f"notify       : {notify_state}")
     console.print(f"mcp log      : [dim]{LOG_PATH}[/dim]")
 
     async def check():

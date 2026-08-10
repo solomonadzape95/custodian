@@ -52,6 +52,11 @@ Be economical. Do not re-run a search you have already run, and do not re-walk
 lineage you have already walked; you can see your earlier results in this
 conversation. Every redundant call costs budget that a deeper hop would use
 better.
+
+When several lookups do not depend on each other — lineage for five different
+tables, owners for a batch of assets — request them together in one turn
+rather than one at a time. The whole conversation is resent on every turn, so
+five separate turns cost far more than one turn with five calls.
 """
 
 POSTMORTEM_TEMPLATE = """\
@@ -96,6 +101,10 @@ You do NOT deprecate anything. You stage candidates for a human:
 
 Be conservative. An asset with ANY live downstream dependency is not dead,
 regardless of its other signals. Say why each candidate scored the way it did.
+
+Independent lookups belong in one turn, not several. If you want lineage or
+owners for several candidates, ask for them all at once — the conversation is
+resent on every turn, so serial calls cost far more than batched ones.
 """
 
 SWEEP_TEMPLATE = """\

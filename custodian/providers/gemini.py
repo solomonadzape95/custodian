@@ -169,6 +169,48 @@ def looks_like_tool_error(text: str) -> bool:
     return head.startswith("error calling tool") or head.startswith("error:")
 
 
+# Tools that only read. Their results are safe to serve twice within a single
+# run, because nothing the agent does can change the answer mid-investigation.
+# Write tools are deliberately absent: replaying a cached "ok" would hide a
+# second write that never happened.
+READ_ONLY_TOOLS = frozenset(
+    {
+        "search",
+        "get_entities",
+        "get_lineage",
+        "get_lineage_paths_between",
+        "get_dataset_queries",
+        "list_schema_fields",
+        "get_documents",
+    }
+)
+
+# Warn the agent while it still has room to act on the warning. Being told at
+# the ceiling is useless — it has already been cut off mid-thought.
+BUDGET_WARNING_AT = 0.75
+
+
+def cache_key(name: str, args: dict[str, Any]) -> str | None:
+    """Stable key for a repeatable lookup, or None if it must not be cached."""
+    if name not in READ_ONLY_TOOLS:
+        return None
+    try:
+        return name + "|" + json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def budget_note(used: int, ceiling: int) -> str | None:
+    """A nudge to start writing up, issued once, while there is still budget."""
+    remaining = ceiling - used
+    return (
+        f"[Custodian: {used} of {ceiling} tool calls used, {remaining} left. "
+        "Stop gathering and write your final answer now, including the "
+        "required write-back calls, or the run will be cut off before you "
+        "can record anything.]"
+    )
+
+
 def _result_text(result: Any) -> str:
     """Flatten an MCP tool result, capped so history cannot balloon."""
     if getattr(result, "isError", False):
@@ -258,6 +300,8 @@ class GeminiProvider:
         called: list[str] = []
         failed: list[str] = []
         text = ""
+        cache: dict[str, str] = {}
+        warned = False
 
         # Rough size of what this turn will send, so the pacer can wait before
         # spending rather than after being refused. ~4 chars per token.
@@ -308,18 +352,39 @@ class GeminiProvider:
             responses = []
             for call in calls:
                 called.append(call.name)
+                args = dict(call.args or {})
+                key = cache_key(call.name, args)
+                if key is not None and key in cache:
+                    # Repeat lookup: serve it back rather than paying a round
+                    # trip. Still counted as a call — the model spent a turn on
+                    # it, and hiding that would misreport the budget.
+                    responses.append(
+                        types.Part.from_function_response(
+                            name=call.name, response={"result": cache[key]}
+                        )
+                    )
+                    continue
                 try:
-                    result = await session.call_tool(call.name, dict(call.args or {}))
+                    result = await session.call_tool(call.name, args)
                     payload = _result_text(result)
                 except Exception as exc:  # surface tool failure to the model
                     payload = f"ERROR calling {call.name}: {exc}"
                 if looks_like_tool_error(payload):
                     failed.append(call.name)
+                elif key is not None:
+                    cache[key] = payload  # never cache a failure
                 responses.append(
                     types.Part.from_function_response(
                         name=call.name, response={"result": payload}
                     )
                 )
+
+            if not warned and len(called) >= int(max_tool_calls * BUDGET_WARNING_AT):
+                warned = True
+                responses.append(
+                    types.Part(text=budget_note(len(called), max_tool_calls))
+                )
+
             contents.append(types.Content(role="user", parts=responses))
 
         return AgentResult(

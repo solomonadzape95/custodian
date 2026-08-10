@@ -153,11 +153,59 @@ custodian investigate order_details \
 # Data died — stage dead assets for review
 custodian sweep --limit 25
 
+# Sweep continuously instead of when someone remembers to
+custodian watch --interval 300
+
 # Human lands the retirements
 custodian approve
 ```
 
 See [`examples/`](examples/) for real generated output.
+
+### `watch` — the sweep, running
+
+A CLI someone remembers to run is not a steward. `watch` is the same sweep on a
+loop, with two properties that matter more than the loop:
+
+**The graph is the dedup store.** Already-staged assets are recorded in DataHub
+as a tag, so each tick asks the catalog what it already knows instead of
+keeping a state file. `watch` is therefore stateless — kill it, restart it, run
+two — and a human removing the tag in the UI is a decision the next tick
+respects rather than silently reverts. Model calls are spent only on genuinely
+new candidates; a quiet estate costs nothing but the deterministic scan.
+
+**Findings are retracted, not just added.** An asset staged last week may have
+gained a consumer since. A stale candidate is worse than none, because someone
+might approve it — so every tick re-checks what is staged and unstages anything
+that has come back to life. If lineage cannot be read at all, the asset is
+treated as revived: failing to prove an orphan must never leave a live table
+queued for retirement.
+
+### Notifications
+
+`investigate` already computes exactly who to tell. `--notify` closes the loop
+from "wrote a document" to "reached the right person".
+
+```bash
+custodian investigate order_details --notify   # renders digests, sends nothing
+custodian watch --notify                       # digests for new candidates
+```
+
+**Rendering is the default and sending takes two deliberate steps** —
+`CUSTODIAN_NOTIFY=smtp` *and* `--send`. The owners in a demo estate are
+synthetic, and mailing them would be an irreversible, outward-facing act taken
+on fabricated data. Passing `--send` without configuring SMTP renders and says
+so; it never fails open into delivery.
+
+Digests are deduplicated per person — one owner with eight impacted tables gets
+one mail listing eight — and they **link to DataHub rather than reproducing the
+post-mortem**. The artifact lives in the graph; the mail exists to drive people
+back to it.
+
+Inbound approve-by-email is deliberately absent. Accepting replies means
+parsing mail, authenticating senders and handling replay, and an emailed
+one-click approve would weaken the exact property this project argues for:
+retirement requires a human at a terminal.
 
 ## Trying it on the showcase estate
 
