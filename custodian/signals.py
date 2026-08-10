@@ -24,6 +24,7 @@ from datahub.metadata.schema_classes import (
     DatasetPropertiesClass,
     EditableDatasetPropertiesClass,
     OwnershipClass,
+    StructuredPropertiesClass,
 )
 from datahub.sdk.main_client import DataHubClient
 
@@ -74,6 +75,39 @@ def _has_description(
     return bool(props is not None and (props.description or "").strip())
 
 
+def _governance_properties(
+    graph: DataHubGraph, urn: str, props: DatasetPropertiesClass | None
+) -> dict[str, str]:
+    """Every key/value that could carry a retention or legal signal.
+
+    Retention lives in different places depending on how an estate was built.
+    Ingestion connectors put it in `customProperties`; a governance team that
+    defined it deliberately puts it in *structured* properties. The
+    showcase estate uses the latter (`showcase.retentionPeriod`), and reading
+    only customProperties silently missed every one of them — the veto looked
+    implemented and protected nothing.
+
+    So both are merged before matching. The property name is stripped of its
+    namespace so `showcase.retentionPeriod` matches the same rule as a bare
+    `retentionPeriod`.
+    """
+    merged: dict[str, str] = dict(props.customProperties) if props else {}
+
+    try:
+        structured = graph.get_aspect(
+            entity_urn=urn, aspect_type=StructuredPropertiesClass
+        )
+    except Exception:
+        structured = None
+
+    for assignment in structured.properties if structured else []:
+        name = assignment.propertyUrn.split(":")[-1].split(".")[-1]
+        if assignment.values:
+            merged[name] = ", ".join(str(v) for v in assignment.values)
+
+    return merged
+
+
 def scan(
     limit: int = 25, platform: str | None = None
 ) -> tuple[list[Candidate], list[Protected], int]:
@@ -112,7 +146,7 @@ def scan(
 
         # Checked only after scoring, so the report can say "this scored 0.80
         # and was spared anyway" rather than quietly omitting the asset.
-        protection = protected_reason(props.customProperties if props else None)
+        protection = protected_reason(_governance_properties(graph, urn, props))
         if protection:
             protected.append(
                 Protected(
