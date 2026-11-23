@@ -8,3 +8,7 @@ dist/
 build/
 .DS_Store
 out/
+
+custodian.mp4
+custodian-final.mp4
+*.srt
